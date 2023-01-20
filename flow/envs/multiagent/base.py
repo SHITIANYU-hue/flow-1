@@ -205,7 +205,7 @@ class MultiEnv(MultiAgentEnv, Env):
         done = {key: key in self.k.vehicle.get_arrived_ids()
                 for key in states.keys()}
         if crash or (self.time_counter >= self.env_params.sims_per_step *
-                     (self.env_params.warmup_steps + self.env_params.horizon)):
+                     (self.env_params.warmup_simsteps + self.env_params.horizon)):
             done['__all__'] = True
         else:
             done['__all__'] = False
@@ -357,7 +357,7 @@ class MultiEnv(MultiAgentEnv, Env):
             raise FatalFlowError(msg=msg)
 
         # perform (optional) warm-up steps before training
-        for _ in range(self.env_params.warmup_steps):
+        for _ in range(self.sim_params.warmup_simsteps):
             observation, _, _, _ = self.step(rl_actions=None)
 
         # render a frame

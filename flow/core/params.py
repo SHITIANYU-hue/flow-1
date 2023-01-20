@@ -7,6 +7,7 @@ from flow.utils.flow_warnings import deprecated_attribute
 from flow.controllers.car_following_models import SimCarFollowingController
 from flow.controllers.rlcontroller import RLController
 from flow.controllers.lane_change_controllers import SimLaneChangeController
+from flow.config import WOLF_SEED
 
 
 SPEED_MODES = {
@@ -17,7 +18,27 @@ SPEED_MODES = {
     "all_checks": 31
 }
 
-LC_MODES = {"aggressive": 0, "no_lat_collide": 512, "strategic": 1621}
+LC_MODES = {
+    "no_lc_safe": 512,
+    "no_lc_aggressive": 0,
+    "sumo_default": 1621,
+    "no_strategic_aggressive": 1108,
+    "no_strategic_safe": 1620,
+    "only_strategic_aggressive": 1,
+    "only_strategic_safe": 513,
+    "no_cooperative_aggressive": 1105,
+    "no_cooperative_safe": 1617,
+    "only_cooperative_aggressive": 4,
+    "only_cooperative_safe": 516,
+    "no_speed_gain_aggressive": 1093,
+    "no_speed_gain_safe": 1605,
+    "only_speed_gain_aggressive": 16,
+    "only_speed_gain_safe": 528,
+    "no_right_drive_aggressive": 1045,
+    "no_right_drive_safe": 1557,
+    "only_right_drive_aggressive": 64,
+    "only_right_drive_safe": 576
+}
 
 # Traffic light defaults
 PROGRAM_ID = 1
@@ -27,26 +48,48 @@ SHOW_DETECTORS = True
 
 
 class TrafficLightParams:
-    """Base traffic light.
+    """Base traffic light class
 
-    This class is used to place traffic lights in the network and describe
-    the state of these traffic lights. In addition, this class supports
-    modifying the states of certain lights via TraCI.
+    This object (and its derived classes) hold properties necessary
+    for adding traffic signals to a network.
     """
-
     def __init__(self, baseline=False):
-        """Instantiate base traffic light.
+        """Instantiate traffic light.
 
         Attributes
         ----------
         baseline: bool
         """
-        # traffic light xml properties
-        self.__tls_properties = dict()
+        self._tls_properties = dict()
 
         # all traffic light parameters are set to default baseline values
         self.baseline = baseline
 
+    def get_properties(self):
+        """
+        Return traffic light properties.
+
+        This is meant to be used by the generator to import traffic light data
+        to the .net.xml file. It is also useful for JSON transfers.
+        """
+        return self._tls_properties
+
+    def set_properties(self, tls_properties):
+        """
+        Set the traffic light properties dictionary.
+
+        Meant to be used in JSON transfers
+        """
+        self._tls_properties = tls_properties
+
+
+class SumoTrafficLightParams(TrafficLightParams):
+    """SUMO traffic light.
+
+    This class is used to place traffic lights in the network and describe
+    the state of these traffic lights. In addition, this class supports
+    modifying the states of certain lights via TraCI.
+    """
     def add(self,
             node_id,
             tls_type="static",
@@ -78,7 +121,7 @@ class TrafficLightParams:
             id of the traffic light program (see Note)
         offset : int, optional
             initial time offset of the program
-        phases : list  of dict, optional
+        phases : list of dict, optional
             list of phases to be followed by the traffic light, defaults
             to default sumo traffic light behavior. Each element in the list
             must consist of a dict with two keys:
@@ -113,40 +156,32 @@ class TrafficLightParams:
         http://sumo.dlr.de/wiki/Simulation/Traffic_Lights#Defining_New_TLS-Programs
         """
         # prepare the data needed to generate xml files
-        self.__tls_properties[node_id] = {"id": node_id, "type": tls_type}
+        self._tls_properties[node_id] = {"id": node_id, "type": tls_type}
 
         if programID:
-            self.__tls_properties[node_id]["programID"] = programID
+            self._tls_properties[node_id]["programID"] = programID
 
         if offset:
-            self.__tls_properties[node_id]["offset"] = offset
+            self._tls_properties[node_id]["offset"] = offset
 
         if phases:
-            self.__tls_properties[node_id]["phases"] = phases
+            self._tls_properties[node_id]["phases"] = phases
 
         if tls_type == "actuated":
             # Required parameters
-            self.__tls_properties[node_id]["max-gap"] = \
+            self._tls_properties[node_id]["max-gap"] = \
                 maxGap if maxGap else MAX_GAP
-            self.__tls_properties[node_id]["detector-gap"] = \
+            self._tls_properties[node_id]["detector-gap"] = \
                 detectorGap if detectorGap else DETECTOR_GAP
-            self.__tls_properties[node_id]["show-detectors"] = \
+            self._tls_properties[node_id]["show-detectors"] = \
                 showDetectors if showDetectors else SHOW_DETECTORS
 
             # Optional parameters
             if file:
-                self.__tls_properties[node_id]["file"] = file
+                self._tls_properties[node_id]["file"] = file
 
             if freq:
-                self.__tls_properties[node_id]["freq"] = freq
-
-    def get_properties(self):
-        """Return traffic light properties.
-
-        This is meant to be used by the generator to import traffic light data
-        to the .net.xml file
-        """
-        return self.__tls_properties
+                self._tls_properties[node_id]["freq"] = freq
 
     def actuated_default(self):
         """Return the default values for an actuated network.
@@ -196,6 +231,53 @@ class TrafficLightParams:
         }
 
 
+class AimsunTrafficLightParams(TrafficLightParams):
+    """ Aimsun traffic light
+
+    This class is used to place traffic lights on nodes and
+    meterings on sections (edges) of an Aimsun network.
+
+#TODO: Add documentation for additional arguments
+    """
+    def __init__(self,
+                 master_control_plan=None,
+                 control_plan=None,
+                 actuated_ids=set(),
+                 conv_to_external_ids=set(),
+                 baseline=False):
+        """
+        Instantiate the Aimsun traffic light parameters object.
+        """
+        super().__init__(baseline)
+        self.master_control_plan = master_control_plan
+        self.control_plan = control_plan
+        self.actuated_ids = actuated_ids
+        self.conv_to_external_ids = conv_to_external_ids # Import program logic from Aimsun and make external (Wolf-controlled)
+
+    def add(self, program_logic_like, actuated=False):
+        """
+        Adds a traffic light to a node.
+
+        The traffic light phases (and other relevant information for creating the TL)
+        are collected in an AimsunProgramLogic object.
+
+        Parameters
+        ----------
+            program_logic_like : AimsunProgramLogic or AimsunProgramLogicTemplate object
+                The information necessary for configuring and controlling
+                the traffic light
+            actuated : Boolean, optional
+                Whether or not to generate detectors for each turn of the
+                program logic at Aimsun load-time. The detectors will be
+                generated iff the 'actuated' argument is True.
+        """
+        self._tls_properties[program_logic_like.node_id] = program_logic_like
+
+        if actuated:
+            self.actuated_ids.add(program_logic_like.node_id)
+
+
+
 class VehicleParams:
     """Base vehicle class.
 
@@ -235,7 +317,6 @@ class VehicleParams:
 
     def add(self,
             veh_id,
-            length=None,
             acceleration_controller=(SimCarFollowingController, {}),
             lane_change_controller=(SimLaneChangeController, {}),
             routing_controller=None,
@@ -243,15 +324,15 @@ class VehicleParams:
             num_vehicles=0,
             car_following_params=None,
             lane_change_params=None,
-            color=None):
+            length=None,
+            color=None,
+            simulator='traci'):
         """Add a sequence of vehicles to the list of vehicles in the network.
 
         Parameters
         ----------
         veh_id : str
             base vehicle ID for the vehicles (will be appended by a number)
-        length: float
-            vehicle's length
         acceleration_controller : tup, optional
             1st element: flow-specified acceleration controller
             2nd element: controller parameters (may be set to None to maintain
@@ -272,14 +353,19 @@ class VehicleParams:
             Params object specifying attributes for Sumo car following model.
         lane_change_params : flow.core.params.SumoLaneChangeParams
             Params object specifying attributes for Sumo lane changing model.
+        length : float, optional
+            Vehicle length
+        simulator : string, optional
+            The simulator used (determines which parameter classes are used
+            by default).
         """
         if car_following_params is None:
-            # FIXME: depends on simulator
-            car_following_params = SumoCarFollowingParams()
+            car_following_params = SumoCarFollowingParams() if simulator == 'traci' \
+                                   else AimsunCarFollowingParams()
 
         if lane_change_params is None:
-            # FIXME: depends on simulator
-            lane_change_params = SumoLaneChangeParams()
+            lane_change_params = SumoLaneChangeParams() if simulator == 'traci' \
+                                 else AimsunLaneChangeParams()
 
         type_params = {}
         type_params.update(car_following_params.controller_params)
@@ -327,7 +413,7 @@ class VehicleParams:
         # This is used to return the actual headways from the vehicles class.
         # It is passed to the vehicle kernel class during environment
         # instantiation.
-        self.minGap[veh_id] = type_params["minGap"]
+        self.minGap[veh_id] = type_params.get("minGap", None)
 
         for i in range(num_vehicles):
             v_id = veh_id + '_%d' % i
@@ -374,143 +460,230 @@ class SimParams(object):
         specifies whether to visualize the rollout(s)
 
         * False: no rendering
-        * True: delegate rendering to sumo-gui for back-compatibility
-        * "gray": static grayscale rendering, which is good for training
-        * "dgray": dynamic grayscale rendering
-        * "rgb": static RGB rendering
-        * "drgb": dynamic RGB rendering, which is good for visualization
+        * True: render in the simulator
+    save_render: bool, optional
+        Whether to save rendering to video directory.
 
     restart_instance : bool, optional
         specifies whether to restart a simulation upon reset. Restarting
         the instance helps avoid slowdowns cause by excessive inflows over
-        large experiment runtimes, but also require the gui to be started
+        large experiment runtimes, but also require the GUI to be started
         after every reset if "render" is set to True.
     emission_path : str, optional
         Path to the folder in which to create the emissions output.
         Emissions output is not generated if this value is not specified
-    save_render : bool, optional
-        specifies whether to save rendering data to disk
-    sight_radius : int, optional
-        sets the radius of observation for RL vehicles (meter)
-    show_radius : bool, optional
-        specifies whether to render the radius of RL observation
-    pxpm : int, optional
-        specifies rendering resolution (pixel / meter)
-    force_color_update : bool, optional
-        whether or not to automatically color vehicles according to their types
+
+    horizon_time : int or float, optional
+        The simulation horizon past warm-up time. Defaults to infinity
+    horizon_simsteps : int, optional
+        Horizon measured in simulator steps
+
+    warmup_time : int or float, optional
+        Simulation time before the initialization of training
+        during a rollout. These warmup steps are not added as steps
+        into training, and the actions of rl agents during these steps
+        are dictated by Aimsun. Defaults to zero
+    warmup_simsteps : int, optional
+        Similar to warmup_time, but measured in simulator steps
+
+    Preconditions
+    -------------
+        If both warmup_time and warmup_simsteps are passed,
+        the values must be consistent with respect to sim_step.
+        Similarly for horizon_time and horizon_simsteps.
     """
 
     def __init__(self,
                  sim_step=0.1,
                  render=False,
+                 save_render=False,
                  restart_instance=False,
                  emission_path=None,
-                 save_render=False,
-                 sight_radius=25,
-                 show_radius=False,
-                 pxpm=2,
-                 force_color_update=False):
+                 start_time=0,
+                 warmup_time=0,
+                 warmup_simsteps=0,
+                 horizon_time=float('inf'),
+                 horizon_simsteps=float('inf')):
         """Instantiate SimParams."""
         self.sim_step = sim_step
         self.render = render
+        self.save_render = save_render
         self.restart_instance = restart_instance
         self.emission_path = emission_path
-        self.save_render = save_render
-        self.sight_radius = sight_radius
-        self.pxpm = pxpm
-        self.show_radius = show_radius
-        self.force_color_update = force_color_update
+
+        self.start_time = start_time
+
+        def assert_timeunit_consistency(time, simsteps, default):
+            if time != default and simsteps != default:
+                assert isclose(time, simsteps * sim_step, rel_tol=1e-4)
+            elif time != default:
+                simsteps = round(time / sim_step)
+            elif simsteps != default:
+                time = round(simsteps * sim_step, 2)
+            return time, simsteps
+
+        self.horizon_time, self.horizon_simsteps = \
+            assert_timeunit_consistency(
+                horizon_time, horizon_simsteps, float('inf'))
+
+        self.warmup_time, self.warmup_simsteps = \
+            assert_timeunit_consistency(
+                warmup_time, warmup_simsteps, 0)
 
 
 class AimsunParams(SimParams):
-    """Aimsun-specific simulation parameters.
-
-    Extends SimParams.
+    """ Aimsun-specific simulation parameters. Extends SimParams.
 
     Attributes
     ----------
-    sim_step : float optional
-        seconds per simulation step; 0.1 by default
-    render : str or bool, optional
-        specifies whether to visualize the rollout(s)
+    In addition to the SimParams attributes:
 
-        * False: no rendering
-        * True: delegate rendering to sumo-gui for back-compatibility
-        * "gray": static grayscale rendering, which is good for training
-        * "dgray": dynamic grayscale rendering
-        * "rgb": static RGB rendering
-        * "drgb": dynamic RGB rendering, which is good for visualization
+    replication : int
+        Aimsun ID of the replication to be simulated.
+        The scenario and experiment will be deduced from the replication.
 
-    restart_instance : bool, optional
-        specifies whether to restart a simulation upon reset. Restarting
-        the instance helps avoid slowdowns cause by excessive inflows over
-        large experiment runtimes, but also require the gui to be started
-        after every reset if "render" is set to True.
-    emission_path : str, optional
-        Path to the folder in which to create the emissions output.
-        Emissions output is not generated if this value is not specified
-    save_render : bool, optional
-        specifies whether to save rendering data to disk
-    sight_radius : int, optional
-        sets the radius of observation for RL vehicles (meter)
-    show_radius : bool, optional
-        specifies whether to render the radius of RL observation
-    pxpm : int, optional
-        specifies rendering resolution (pixel / meter)
-    network_name : str, optional
-        name of the network generated in Aimsun.
-    experiment_name : str, optional
-        name of the experiment generated in Aimsun
-    replication_name : str, optional
-        name of the replication generated in Aimsun. When loading
-        an Aimsun template, this parameter must be set to the name
-        of the replication to be run by the simulation; in this case,
-        the network_name and experiment_name parameters are not
-        necessary as they will be obtained from the replication name.
+
+                  start_time
+    |-----------------|--------------------------------------------------|
+     <- warmup_time -> <-                horizon_time                  ->
+
+    start_time : Int or Float or None, optional
+        The start time of the simulation, in seconds from 12:00:00 AM.
+        If None, the default start time of the scenario will be used.
+        Defaults to None.
+
+
+    traffic_demand: str or None, optional
+        Name of the traffic demand to be used in the experiment.
+        If None, Wolf will attempt to generate a new traffic demand using
+        VehicleParams and InFlows.
     centroid_config_name : str, optional
         name of the centroid configuration to load in Aimsun. This
         parameter is only used when loading an Aimsun template,
         not when generating one.
-    subnetwork_name : str, optional
-        name of the subnetwork to load in Aimsun. This parameter is not
+    subnetwork_id : int, optional
+        The id of the subnetwork to load in Aimsun. This parameter is not
         used when generating a network; it can be used when loading an
         Aimsun template containing a subnetwork in order to only load
         the objects contained in this subnetwork. If set to None or if the
         specified subnetwork does not exist, the whole network will be loaded.
+
+    stats_collection_interval : Int or Float
+                                or (Int, Int, Int) or [Int, Int, Int], optional
+        The duration of the interval used for collection of statistics
+        (measured either in seconds or in (hour, minute, sec)).
+        If equal to 0, then statistics are not collected.
+    detection_interval: Int or Float
+                        or (Int, Int, Int) or [Int, Int, Int], optional
+        The duration of the interval used for collection of detector readings.
+        If equal to 0, then detectors are not active.
+
+    initial_state_id: Int, optional
+        The Aimsun id of the initial state. If None, the warmup time will be used.
+        If not None, then a warmup time will not be used. Defaults to None.
+
+    record_routes : Bool, optional
+        Whether to keep buffered lists of vehicles that enter a new
+        section. Defaults to False.
+    evaluate : Dict or False, optional
+        If a nonempty dictionary is passed, configures the information that
+        will be stored for evaluation.
+
+        The following (optional) keys can be passed:
+            'save_to': String or os.path
+                The directory where the data will be saved.
+            'net': Bool
+                If key is passed, the network graph will be stored in JSON format
+                (saved with extension .net.json)
+            'obsrew': Bool
+                If the key is passed, the observations and rewards will be
+                dumped in JSON format (saved with extension .obsrew.json)
+            'sqlite': Dict or False
+                If a nonempty dictionary is passed, configures the SQLITE DB export
+                    'save_to': String
+                        The filename
+                    'vehs', 'detectors', 'network', 'sections', 'lanes'
+                        These keys configure the statistics that will be stored
+                        in the database
+            'xmlanim': Bool
+                If key is passed, saves the vehicle trajectories XML file.
+    verbose : Bool, optional
+        If False, filters out some of the messages posted to the console
+        when Aimsun is being loaded, or is running. Defaults to True.
+    seed : 'random' or Int, optional
+        The seed to use. If the string 'random' is passed, a random integer seed
+        will be generated at Aimsun API initialization.
+    simulator_restart_period: Int, optional
+        More flexible than "restart_instance". If equal to N != -1, then
+        the simulator will be restarted every N environment resets. The
+        intended purpose is a brute-force way of clearing simulator memory
+        leaks. Defaults to -1.
+    staggered_init_address : (String, Int), optional
+        TCP address to use if using an Aimsun license
+        semaphore (used in cases when launching several
+        Aimsun instances simultaneously in parallel freezes
+        the license server)
+    nthreads: Dictionary, optional
+        'sim': Int
+            Number of threads to use for simulation
+        'routing': Int
+            Number of threads to use for routing
     """
 
     def __init__(self,
+                 replication,
                  sim_step=0.1,
                  render=False,
-                 restart_instance=False,
-                 emission_path=None,
                  save_render=False,
-                 sight_radius=25,
-                 show_radius=False,
-                 pxpm=2,
-                 # set to match Flow_Aimsun.ang's scenario name
-                 network_name="Dynamic Scenario 866",
-                 # set to match Flow_Aimsun.ang's experiment name
-                 experiment_name="Micro SRC Experiment 867",
-                 # set to match Flow_Aimsun.ang's replication name
-                 replication_name="Replication 870",
+                 restart_instance=False,
+                 simulator_restart_period=-1,
+                 emission_path=None,
+                 start_time=None,
+                 warmup_time=0,
+                 warmup_simsteps=0,
+                 initial_state_id=None,
+                 horizon_time=float('inf'),
+                 horizon_simsteps=float('inf'),
+                 traffic_demand=None,
                  centroid_config_name=None,
-                 subnetwork_name=None):
+                 subnetwork_id=None,
+                 stats_collection_interval=0,
+                 detection_interval=0,
+                 record_routes=False,
+                 evaluate=False,
+                 verbose=True,
+                 seed=WOLF_SEED,
+                 staggered_init_address=None,
+                 nthreads={}):
         """Instantiate AimsunParams."""
-        super(AimsunParams, self).__init__(
-            sim_step, render, restart_instance, emission_path, save_render,
-            sight_radius, show_radius, pxpm)
-        self.network_name = network_name
-        self.experiment_name = experiment_name
-        self.replication_name = replication_name
+        super().__init__(
+            sim_step, render, save_render, restart_instance, emission_path,
+            start_time, warmup_time, warmup_simsteps,
+            horizon_time, horizon_simsteps)
+        self.replication = replication
+        self.traffic_demand = traffic_demand
         self.centroid_config_name = centroid_config_name
-        self.subnetwork_name = subnetwork_name
+        self.subnetwork_id = subnetwork_id
 
+        assert((warmup_time == 0) or (initial_state_id is None))
+        self.initial_state_id = initial_state_id
+
+        self.stats_collection_interval = stats_collection_interval
+        self.detection_interval = detection_interval
+
+        self.record_routes = record_routes
+        self.evaluate = evaluate
+        self.verbose = verbose
+        self.seed = seed
+        self.staggered_init_address = staggered_init_address
+        self.nthreads = nthreads
+
+        assert not (restart_instance and (simulator_restart_period > 1))
+        self.simulator_restart_period = simulator_restart_period
 
 class SumoParams(SimParams):
-    """Sumo-specific simulation parameters.
-
-    Extends SimParams.
+    """
+    Sumo-specific simulation parameters. Extends SimParams.
 
     These parameters are used to customize a sumo simulation instance upon
     initialization. This includes passing the simulation step length,
@@ -519,13 +692,29 @@ class SumoParams(SimParams):
 
     Attributes
     ----------
-    port : int, optional
-        Port for Traci to connect to; finds an empty port by default
     sim_step : float optional
         seconds per simulation step; 0.1 by default
     emission_path : str, optional
         Path to the folder in which to create the emissions output.
         Emissions output is not generated if this value is not specified
+    render : str or bool, optional
+        specifies whether to visualize the rollout(s)
+
+        * False: no rendering
+        * True: delegate rendering to sumo-gui
+    save_render: bool, optional
+        Whether to save rendering to video directory.
+    restart_instance : bool, optional
+        specifies whether to restart a sumo instance upon reset. Restarting
+        the instance helps avoid slowdowns cause by excessive inflows over
+        large experiment runtimes, but also require the gui to be started
+        after every reset if "render" is set to True.
+
+    port : int, optional
+        Port for Traci to connect to; finds an empty port by default
+    start_at_load : bool, optional
+        If set to False, the user needs to manually start the simulation
+        in the GUI
     lateral_resolution : float, optional
         width of the divided sublanes within a lane, defaults to None (i.e.
         no sublanes). If this value is specified, the vehicle in the
@@ -533,40 +722,18 @@ class SumoParams(SimParams):
     no_step_log : bool, optional
         specifies whether to add sumo's step logs to the log file, and
         print them into the terminal during runtime, defaults to True
-    render : str or bool, optional
-        specifies whether to visualize the rollout(s)
-
-        * False: no rendering
-        * True: delegate rendering to sumo-gui for back-compatibility
-        * "gray": static grayscale rendering, which is good for training
-        * "dgray": dynamic grayscale rendering
-        * "rgb": static RGB rendering
-        * "drgb": dynamic RGB rendering, which is good for visualization
-
-    save_render : bool, optional
-        specifies whether to save rendering data to disk
-    sight_radius : int, optional
-        sets the radius of observation for RL vehicles (meter)
-    show_radius : bool, optional
-        specifies whether to render the radius of RL observation
-    pxpm : int, optional
-        specifies rendering resolution (pixel / meter)
-    force_color_update : bool, optional
-        whether or not to automatically color vehicles according to their types
     overtake_right : bool, optional
         whether vehicles are allowed to overtake on the right as well as
         the left
     seed : int, optional
         seed for sumo instance
-    restart_instance : bool, optional
-        specifies whether to restart a sumo instance upon reset. Restarting
-        the instance helps avoid slowdowns cause by excessive inflows over
-        large experiment runtimes, but also require the gui to be started
-        after every reset if "render" is set to True.
+    save_rng_state : bool, optional
+        Include the state of the random number generators when saving
+        state
     print_warnings : bool, optional
         If set to false, this will silence sumo warnings on the stdout
-    start_at_load : bool, optional
-        If set to false, this will ask the user to start the simulation from the gui
+    delay_between_simsteps : float, optional
+        Wall-clock time delay between sim-steps
     teleport_time : int, optional
         If negative, vehicles don't teleport in gridlock. If positive,
         they teleport after teleport_time seconds
@@ -580,37 +747,44 @@ class SumoParams(SimParams):
     """
 
     def __init__(self,
-                 port=None,
                  sim_step=0.1,
-                 emission_path=None,
-                 lateral_resolution=None,
-                 no_step_log=True,
                  render=False,
                  save_render=False,
-                 sight_radius=25,
-                 show_radius=False,
-                 pxpm=2,
-                 force_color_update=False,
+                 emission_path=None,
+                 restart_instance=False,
+                 start_time=0.,
+                 warmup_time=0,
+                 warmup_simsteps=0,
+                 horizon_time=float('inf'),
+                 horizon_simsteps=float('inf'),
+                 port=None,
+                 start_at_load=True,
+                 lateral_resolution=None,
+                 no_step_log=True,
                  overtake_right=False,
                  seed=None,
-                 restart_instance=False,
+                 save_rng_state=False,
                  print_warnings=True,
-                 start_at_load=True,
+                 delay_between_simsteps=0.,
                  teleport_time=-1,
                  num_clients=1,
                  color_by_speed=False,
                  use_ballistic=False):
         """Instantiate SumoParams."""
-        super(SumoParams, self).__init__(
-            sim_step, render, restart_instance, emission_path, save_render,
-            sight_radius, show_radius, pxpm, force_color_update)
+        super().__init__(
+            sim_step, render, save_render, restart_instance, emission_path,
+            start_time, warmup_time, warmup_simsteps,
+            horizon_time, horizon_simsteps)
+
         self.port = port
+        self.start_at_load = start_at_load
         self.lateral_resolution = lateral_resolution
         self.no_step_log = no_step_log
         self.seed = seed
+        self.save_rng_state = save_rng_state
         self.overtake_right = overtake_right
         self.print_warnings = print_warnings
-        self.start_at_load = start_at_load
+        self.delay_between_simsteps = delay_between_simsteps
         self.teleport_time = teleport_time
         self.num_clients = num_clients
         self.color_by_speed = color_by_speed
@@ -629,13 +803,6 @@ class EnvParams:
     additional_params : dict, optional
         Specify additional environment params for a specific
         environment configuration
-    horizon : int, optional
-        number of steps per rollouts
-    warmup_steps : int, optional
-        number of steps performed before the initialization of training
-        during a rollout. These warmup steps are not added as steps
-        into training, and the actions of rl agents during these steps
-        are dictated by sumo. Defaults to zero
     sims_per_step : int, optional
         number of sumo simulation steps performed in any given rollout
         step. RL agents perform the same action for the duration of
@@ -648,23 +815,26 @@ class EnvParams:
         specifies whether to clip actions from the policy by their range when
         they are inputted to the reward function. Note that the actions are
         still clipped before they are provided to `apply_rl_actions`.
+    save_agent_data : bool, optional
+        Specifies whether to save the actions, rewards and obs for
+        each agent (saved to wolf/other/tmp).
     """
 
     def __init__(self,
                  additional_params=None,
-                 horizon=float('inf'),
-                 warmup_steps=0,
+                 horizon=100, #TODO: Remove
                  sims_per_step=1,
                  evaluate=False,
-                 clip_actions=True):
+                 clip_actions=True,
+                 save_agent_data=False):
         """Instantiate EnvParams."""
         self.additional_params = \
             additional_params if additional_params is not None else {}
-        self.horizon = horizon
-        self.warmup_steps = warmup_steps
         self.sims_per_step = sims_per_step
+        self.horizon=horizon
         self.evaluate = evaluate
         self.clip_actions = clip_actions
+        self.save_agent_data = save_agent_data
 
     def get_additional_param(self, key):
         """Return a variable from additional_params."""
@@ -686,8 +856,12 @@ class NetParams:
     Attributes
     ----------
     inflows : InFlows type, optional
-        specifies the inflows of specific edges and the types of vehicles
+        Specifies the inflows of specific edges and the types of vehicles
         entering the network from these edges
+    od_config : OriginDestinationConfig type, optional
+        Specifies the demand using an origin-destination matrix.
+        Contains inflow edge ids, outflow edge ids, and a matrix giving
+        the number of trips between every (inflow, outflow) pair
     osm_path : str, optional
         path to the .osm file that should be used to generate the network
         configuration files
@@ -701,11 +875,17 @@ class NetParams:
 
     def __init__(self,
                  inflows=None,
+                 od_config=None,
                  osm_path=None,
                  template=None,
                  additional_params=None):
         """Instantiate NetParams."""
+        assert inflows is None or od_config is None,\
+            'Demand must be defined either by turning proportions or by '\
+            'an origin-destination matrix for a centroid configuration, '\
+            'not both.'
         self.inflows = inflows or InFlows()
+        self.od_config = od_config
         self.osm_path = osm_path
         self.template = template
         self.additional_params = additional_params or {}
@@ -851,6 +1031,7 @@ class SumoCarFollowingParams:
             car_follow_model="IDM",
             **kwargs):
         """Instantiate SumoCarFollowingParams."""
+        """
         # check for deprecations (minGap)
         if "minGap" in kwargs:
             deprecated_attribute(self, "minGap", "min_gap")
@@ -875,6 +1056,7 @@ class SumoCarFollowingParams:
         if "carFollowModel" in kwargs:
             deprecated_attribute(self, "carFollowModel", "car_follow_model")
             car_follow_model = kwargs["carFollowModel"]
+        """
 
         # create a controller_params dict with all the specified parameters
         self.controller_params = {
@@ -908,14 +1090,71 @@ class SumoLaneChangeParams:
     ----------
     lane_change_mode : str or int, optional
         may be one of the following:
+        * "no_lc_safe" (default): Disable all SUMO lane changing but still
+          handle safety checks (collision avoidance and safety-gap enforcement)
+          in the simulation. Binary is [001000000000]
+        * "no_lc_aggressive": SUMO lane changes are not executed, collision
+          avoidance and safety-gap enforcement are off.
+          Binary is [000000000000]
 
-        * "no_lat_collide" (default): Human cars will not make lane
-          changes, RL cars can lane change into any space, no matter how
-          likely it is to crash
-        * "strategic": Human cars make lane changes in accordance with SUMO
-          to provide speed boosts
-        * "aggressive": RL cars are not limited by sumo with regard to
-          their lane-change actions, and can crash longitudinally
+        * "sumo_default": Execute all changes requested by a custom controller
+          unless in conflict with TraCI. Binary is [011001010101].
+
+        * "no_strategic_aggressive": Execute all changes except strategic
+          (routing) lane changes unless in conflict with TraCI. Collision
+          avoidance and safety-gap enforcement are off. Binary is [010001010100]
+        * "no_strategic_safe": Execute all changes except strategic
+          (routing) lane changes unless in conflict with TraCI. Collision
+          avoidance and safety-gap enforcement are on. Binary is [011001010100]
+        * "only_strategic_aggressive": Execute only strategic (routing) lane
+          changes unless in conflict with TraCI. Collision avoidance and
+          safety-gap enforcement are off. Binary is [000000000001]
+        * "only_strategic_safe": Execute only strategic (routing) lane
+          changes unless in conflict with TraCI. Collision avoidance and
+          safety-gap enforcement are on. Binary is [001000000001]
+
+        * "no_cooperative_aggressive": Execute all changes except cooperative
+          (change in order to allow others to change) lane changes unless in
+          conflict with TraCI. Collision avoidance and safety-gap enforcement
+          are off. Binary is [010001010001]
+        * "no_cooperative_safe": Execute all changes except cooperative
+          lane changes unless in conflict with TraCI. Collision avoidance and
+          safety-gap enforcement are on. Binary is [011001010001]
+        * "only_cooperative_aggressive": Execute only cooperative lane changes
+          unless in conflict with TraCI. Collision avoidance and safety-gap
+          enforcement are off. Binary is [000000000100]
+        * "only_cooperative_safe": Execute only cooperative lane changes
+          unless in conflict with TraCI. Collision avoidance and safety-gap
+          enforcement are on. Binary is [001000000100]
+
+        * "no_speed_gain_aggressive": Execute all changes except speed gain (the
+           other lane allows for faster driving) lane changes unless in conflict
+           with TraCI. Collision avoidance and safety-gap enforcement are off.
+           Binary is [010001000101]
+        * "no_speed_gain_safe": Execute all changes except speed gain
+          lane changes unless in conflict with TraCI. Collision avoidance and
+          safety-gap enforcement are on. Binary is [011001000101]
+        * "only_speed_gain_aggressive": Execute only speed gain lane changes
+          unless in conflict with TraCI. Collision avoidance and safety-gap
+          enforcement are off. Binary is [000000010000]
+        * "only_speed_gain_safe": Execute only speed gain lane changes
+          unless in conflict with TraCI. Collision avoidance and safety-gap
+          enforcement are on. Binary is [001000010000]
+
+        * "no_right_drive_aggressive": Execute all changes except right drive
+          (obligation to drive on the right) lane changes unless in conflict
+          with TraCI. Collision avoidance and safety-gap enforcement are off.
+          Binary is [010000010101]
+        * "no_right_drive_safe": Execute all changes except right drive
+          lane changes unless in conflict with TraCI. Collision avoidance and
+          safety-gap enforcement are on. Binary is [011000010101]
+        * "only_right_drive_aggressive": Execute only right drive lane changes
+          unless in conflict with TraCI. Collision avoidance and safety-gap
+          enforcement are off. Binary is [000001000000]
+        * "only_right_drive_safe": Execute only right drive lane changes
+          unless in conflict with TraCI. Collision avoidance and safety-gap
+          enforcement are on. Binary is [001001000000]
+
         * int values may be used to define custom lane change modes for the
           given vehicles, specified at:
           http://sumo.dlr.de/wiki/TraCI/Change_Vehicle_State#lane_change_mode_.280xb6.29
@@ -954,7 +1193,7 @@ class SumoLaneChangeParams:
     """
 
     def __init__(self,
-                 lane_change_mode="no_lat_collide",
+                 lane_change_mode="no_lc_safe",
                  model="LC2013",
                  lc_strategic=1.0,
                  lc_cooperative=1.0,
@@ -969,6 +1208,7 @@ class SumoLaneChangeParams:
                  lc_accel_lat=1.0,
                  **kwargs):
         """Instantiate SumoLaneChangeParams."""
+        """
         # check for deprecations (lcStrategic)
         if "lcStrategic" in kwargs:
             deprecated_attribute(self, "lcStrategic", "lc_strategic")
@@ -1024,6 +1264,7 @@ class SumoLaneChangeParams:
         if "lcAccelLat" in kwargs:
             deprecated_attribute(self, "lcAccelLat", "lc_accel_lat")
             lc_accel_lat = kwargs["lcAccelLat"]
+        """
 
         # check for valid model
         if model not in ["LC2013", "SL2015"]:
@@ -1062,9 +1303,276 @@ class SumoLaneChangeParams:
         elif not (isinstance(lane_change_mode, int)
                   or isinstance(lane_change_mode, float)):
             logging.error("Setting lane change mode to default.")
-            lane_change_mode = LC_MODES["no_lat_collide"]
+            lane_change_mode = LC_MODES["no_lc_safe"]
 
         self.lane_change_mode = lane_change_mode
+
+
+class AimsunCarFollowingParams:
+    """
+    Parameters for Aimsun-controlled acceleration behavior.
+
+    These are a subset of the Vehicle Type attributes in Aimsun. The default vehicle-following
+    model used in Aimsun is Gipps, with the option to enable Adaptive Cruise Control (ACC) and
+    Collaborative Adaptive Cruise Control (CACC).
+
+    Most of the attributes are random variables with a truncated normal distribution, which is
+    characterized by the mean, standard deviation, min and max.
+
+    Attributes
+    ----------
+        max_acc: dict
+            {'mean': float, 'dev': float, 'min': float, 'max': float}
+            Maximum Acceleration: This is the maximum acceleration, in m/s2, that the vehicle
+                can achieve under any circumstances. As used in Gipps car-following model
+
+        normal_dec: dict
+            {'mean': float, 'dev': float, 'min': float, 'max': float}
+            Normal Deceleration: This is the maximum deceleration, in m/s2, that the vehicle
+                can achieve under normal circumstances. As used in Gipps car-following model
+
+        max_dec: dict
+            {'mean': float, 'dev': float, 'min': float, 'max': float}
+            Maximum Deceleration: This is the most severe braking, in m/s2, that the vehicle
+                can achieve under special circumstances. As used in Gipps car-following model
+
+        safety_margin_factor: dict
+            {'mean': float, 'dev': float, 'min': float, 'max': float}
+            Safety Margin Factor: In the gap acceptance calculations to determine whether a
+                vehicle can move at a priority junction, the safety margin is set in the Road
+                Type parameters. This vehicle type parameter provides a multiplier, with a
+                truncated normal range, to apply to the turn safety margin values.
+
+        lateral_clearance: dict
+            {'mean': float, 'dev': float, 'min': float, 'max': float}
+            Lateral Clearance: The lateral clearance vehicle to vehicle variations come from
+                distributions defined by vehicle type. The minimum lateral spacing between
+                two vehicles is the sum of the lateral clearances of both vehicles.
+
+        max_lateral_speed: dict
+            {'mean': float, 'dev': float, 'min': float, 'max': float}
+            Max Lateral Speed: When moving laterally, the vehicles use their maximum lateral speed.
+
+        sensitivity_factor: dict
+            {'mean': float, 'dev': float, 'min': float, 'max': float}
+            Sensitivity Factor: In the deceleration component of the car-following model,
+                the follower makes an estimation of the deceleration of the leader using
+                the sensitivity factor.
+
+        gap: dict
+            {'mean': float, 'dev': float, 'min': float, 'max': float}
+            Gap: This parameter is used to override the headway between vehicles and force
+                a larger distance between vehicles than the value calculated by the car-following
+                model. The default Gap parameter value of constant 0.0 implies the normal headway
+                will be used, any other value forces a larger headway.
+
+        headway_aggressiveness: dict
+            {'mean': float, 'dev': float, 'min': float, 'max': float}
+            Headway Aggressiveness: Modifies the relationship of the inter-vehicle distance as a
+                function of speed. This distance is simply linear in the Gipps model and does not
+                correspond to the observed behavior under congested highway conditions.
+
+        stop_and_go: boolean
+            Favors Stop and Go: Allows a vehicle to adjust how it uses its aggressiveness value.
+            If True, +a is used during deceleration and -a is used during acceleration. Hence,
+            when a > 0, the gap between vehicles will be larger during acceleration than deceleration
+            for the same speed.
+
+        ==== Adaptive Cruise Control (ACC) ====
+        acc_params: dict
+            'percent_acc': float (percentage)
+                Percentage of vehicles of this type equipped with ACC
+
+            'speed_gain_free_flow': float
+                Speed Gain Free Flow: The gain on the speed difference between the free flow speed
+                    and the vehicle's current speed (s-1)
+
+            'speed_gain_following': float
+                Speed Gain Following: The gain on the speed difference between the preceding vehicle
+                    and the subject vehicle (s-1)
+
+            'distance_gain': float
+                Distance Gain: The gain on the position difference between the preceding vehicle and the
+                    subject vehicle (s-2)
+
+            'lower_clearance_threshold': float
+            'upper_clearance_threshold': float
+                  Lower Distance Threshold, Upper Distance Threshold: The thresholds for the space
+                      between the rear bumper of a vehicle and the front bumper of the following (metres)
+
+            'desired_time_gap': dict
+                {'mean': float, 'dev': float, 'min': float, 'max': float}
+                  Desired Time Gap: The desired time gap of the ACC controller (s)
+                      (this is a random variable with a truncated normal distribution)
+
+        ==== Collaborative Adaptive Cruise Control (CACC) ====
+        cacc_params: dict
+            'percent_cacc': float (percentage)
+                Percentage of vehicles of this type equipped with CACC
+
+            'speed_gain': float
+                Speed Gain: The gain on the speed difference between the preceding connected vehicle
+                    and the subject CACC vehicle
+
+            'distance_gain': float
+                Distance Gain: The gain on the position difference between the preceding connected
+                    vehicle and the subject CACC vehicle (s-1)
+
+            'time_gap_leader': float
+            'time_gap_follower': float
+                Time Gap Leader, Time Gap Follower: The constant time gap between the the connected leader
+                    (follower) of the subject CACC vehicle (s)
+
+            'lower_gap_threshold': float
+            'upper_gap_threshold': float
+                Lower Gap Threshold, Upper Gap Threshold: The upper and lower thresholds for the time gap (s)
+    """
+    def __init__(self,
+                 max_acc = {},
+                 normal_dec = {},
+                 max_dec = {},
+                 safety_margin_factor = {},
+                 lateral_clearance = {},
+                 sensitivity_factor = {},
+                 gap = {},
+                 headway_aggressiveness = {},
+                 stop_and_go=False,
+                 acc_params = {},
+                 cacc_params = {}):
+
+        # Default Aimsun values for Vehicle Type == Car
+        self.controller_params = {
+                           'max_acc': {'mean': 3., 'dev': 0.2, 'min': 2.6, 'max': 3.4},
+                        'normal_dec': {'mean': 4., 'dev': 0.25,'min': 3.5, 'max': 4.5},
+                           'max_dec': {'mean': 6., 'dev': 0.5, 'min': 5.,  'max': 7.},
+              'safety_margin_factor': {'mean': 1., 'dev': 0.,  'min': 1.,  'max': 1.},
+                 'lateral_clearance': {'mean': 0.3,'dev': 0.1, 'min': 0.2, 'max': 0.45},
+                 'max_lateral_speed': {'mean': 3., 'dev': 0.,  'min': 3.,  'max': 3.},
+                'sensitivity_factor': {'mean': 1., 'dev': 0.,  'min': 1.,  'max': 1.},
+                               'gap': {'mean': 0., 'dev': 0.,  'min': 0.,  'max': 0.},
+            'headway_aggressiveness': {'mean': 0., 'dev': 0.,  'min': -1., 'max': 1.},
+            'stop_and_go': stop_and_go,
+            'acc_params': {'percent_acc': 0.,
+                           'speed_gain_free_flow': 0.4,
+                           'speed_gain_following': 0.07,
+                           'distance_gain': 0.23,
+                           'lower_distance_threshold': 100.,
+                           'upper_distance_threshold': 120.,
+                           'desired_time_gap': {'mean': 1.2,
+                                                'dev': 0.4,
+                                                'min': 1.1,
+                                                'max': 2.2},},
+            'cacc_params': {'percent_cacc': 0.,
+                            'speed_gain': 0.0125,
+                            'distance_gain': 0.45,
+                            'time_gap_leader': 1.5,
+                            'time_gap_follower': 0.6,
+                            'lower_gap_threshold': 1.5,
+                            'upper_gap_threshold': 2.,},
+        }
+
+        # Update the default values with the passed values
+        self.controller_params['max_acc'].update(max_acc)
+        self.controller_params['normal_dec'].update(normal_dec)
+        self.controller_params['max_dec'].update(max_dec)
+        self.controller_params['safety_margin_factor'].update(safety_margin_factor)
+        self.controller_params['lateral_clearance'].update(lateral_clearance)
+        self.controller_params['sensitivity_factor'].update(sensitivity_factor)
+        self.controller_params['gap'].update(gap)
+        self.controller_params['headway_aggressiveness'].update(headway_aggressiveness)
+        self.controller_params['acc_params'].update(acc_params)
+        self.controller_params['cacc_params'].update(cacc_params)
+
+        if not (0 <= (self.controller_params['acc_params']['percent_acc'] +
+                      self.controller_params['cacc_params']['percent_cacc']) <= 100):
+            raise ValueError('The sum of the percentages of vehicles equipped with ACC'
+                             ' and with CACC should be between 0 and 100.')
+
+        # Needed for base controller, recorded here for the moment
+        self.controller_params['accel'] = self.controller_params['max_acc']['mean']
+        self.controller_params['decel'] = self.controller_params['max_dec']['mean']
+
+
+class AimsunLaneChangeParams:
+    """
+    Parameters for Aimsun-controlled lane-change behavior.
+
+    These are a subset of the Vehicle Type attributes in Aimsun.
+
+    Attributes
+    ----------
+        overtake_speed_threshold: float
+        lane_recovery_speed_threshold: float
+            Overtake Speed Threshold and Lane Recovery Speed Threshold: These two parameters
+                control overtaking when a vehicle changes lane to pass another. If the vehicle
+                is constrained to travel at less than the Overtaking Speed Threshold of its
+                desired speed, it will consider an overtaking manouver. Lane Recovery Speed
+                Threshold is the percentage of the desired speed of a vehicle above which a
+                vehicle may decide to get back to the original lane.
+
+        percent_staying_in_overtaking_lane: float
+            Percentage Staying in Overtaking Lane: Probability that a vehicle will stay in the
+                faster lane instead of recovering to a slower lane following an overtake
+                manouver.
+
+        imprudent_lane_changing: boolean
+            Imprudent Lane Changing: Whether or not a vehicle of this type will still change
+                lane after assesing an unsafe gap.
+
+        cooperate_in_creating_gap: boolean
+            Cooperate in Creating a Gap: Whether or not vehicles of this type can cooperate
+                in creating a gap for a lane changing vehicle to accept.
+
+        aggressiveness_level: dict
+            {'mean': float, 'dev': float, 'min': float, 'max': float}
+            Aggressiveness Level: The higher the level, the smaller the gap the vehicle will
+                accept in lane-changing
+
+        look_ahead_factor: dict
+            {'min': float, 'max': float}
+            Look-Ahead Distance Factor: Modify the look-aheads used in the lane changing model
+                to determine where vehicles consider their lane choice for a forthcoming turn.
+
+        allow_non_lane_based: boolean
+            Allow Vehicles Non-Lane Based Behavior: Whether the vehicle of this type can consider
+                non-lane based movements or not.
+
+        margin_for_overtaking: dict
+            {'mean': float, 'dev': float, 'min': float, 'max': float}
+            Margin for Overtaking Manouver: Safety margin for two-way overtaking
+                (truncated normal) (s)
+    """
+    def __init__(self,
+                 overtake_speed_threshold=90.,
+                 lane_recovery_speed_threshold=95.,
+                 percent_staying_in_overtaking_lane=0.,
+                 imprudent_lane_changing=True,
+                 cooperate_in_creating_gap=True,
+                 aggressiveness_level={},
+                 look_ahead_factor={},
+                 allow_non_lane_based=False,
+                 margin_for_overtaking={}):
+
+        # Default Aimsun values for Vehicle Type == Car
+        self.controller_params = {
+            'overtake_speed_threshold': overtake_speed_threshold,
+            'lane_recovery_speed_threshold': lane_recovery_speed_threshold,
+            'percent_staying_in_overtaking_lane': percent_staying_in_overtaking_lane,
+            'imprudent_lane_changing': imprudent_lane_changing,
+            'cooperate_in_creating_gap': cooperate_in_creating_gap,
+            'aggressiveness_level': {'mean': 0.2, 'dev': 0., 'min': 0., 'max': 1.},
+            'look_ahead_factor': {'min': 0.8, 'max': 1.2},
+            'allow_non_lane_based': allow_non_lane_based,
+            'margin_for_overtaking': {'mean': 5.,
+                                      'dev': 3.,
+                                      'min': 1.,
+                                      'max': 10.}
+        }
+
+        # Update the default values with the passed values
+        self.controller_params['aggressiveness_level'].update(aggressiveness_level)
+        self.controller_params['look_ahead_factor'].update(look_ahead_factor)
+        self.controller_params['margin_for_overtaking'].update(margin_for_overtaking)
 
 
 class InFlows:
@@ -1090,7 +1598,7 @@ class InFlows:
             end=86400,
             number=None,
             **kwargs):
-        r"""Specify a new inflow for a given type of vehicles and edge.
+        """Specify a new inflow for a given type of vehicles and edge.
 
         Parameters
         ----------
@@ -1158,20 +1666,6 @@ class InFlows:
         parameters that may be added via \*\*kwargs, refer to:
         http://sumo.dlr.de/wiki/Definition_of_Vehicles,_Vehicle_Types,_and_Routes
         """
-        # check for deprecations
-        def deprecate(old, new):
-            deprecated_attribute(self, old, new)
-            new_val = kwargs[old]
-            del kwargs[old]
-            return new_val
-
-        if "vehsPerHour" in kwargs:
-            vehs_per_hour = deprecate("vehsPerHour", "vehs_per_hour")
-        if "departLane" in kwargs:
-            depart_lane = deprecate("departLane", "depart_lane")
-        if "departSpeed" in kwargs:
-            depart_speed = deprecate("departSpeed", "depart_speed")
-
         new_inflow = {
             "name": "%s_%d" % (name, len(self.__flows)),
             "vtype": veh_type,
@@ -1219,6 +1713,10 @@ class InFlows:
         """Return the inflows of each edge."""
         return self.__flows
 
+    def is_empty(self):
+        """Returns the number of registered inflows"""
+        return not self.__flows
+
 
 class DetectorParams:
     def __init__(self):
@@ -1233,8 +1731,7 @@ class DetectorParams:
         position,
         frequency,
         storage_file='out.xml',
-        friendly_position=False,
-    ):
+        friendly_position=False):
         """
         Adds a single induction loop detector.
 
@@ -1278,22 +1775,26 @@ class DetectorParams:
         assert network is not None, 'Network cannot be None.'
 
         connections = network.connections[node_id]
+        edge_id_idx_mapping = [edge['id'] for edge in network.edges]
         incoming_lanes = list(set([f"{c['from']}_{c['fromLane']}" for c in connections]))
+        incoming_lanes.sort()
         counter = 0
 
         for lane_id in incoming_lanes:
+            lane_length = network.edges[edge_id_idx_mapping.index(lane_id.rsplit('_', 1)[0])]['length']
             for position in positions:
-                detector = {
-                    'id': f'{name}_{counter}',
-                    'lane': lane_id,
-                    'pos': str(position),
-                    'freq': str(frequency),
-                    'file': storage_file,
-                    'friendlyPos': str(friendly_position).lower(),
-                    'type': 'inductionLoop',
-                }
-                counter += 1
-                self.__detectors.append(detector)
+                if abs(position) < int(lane_length):
+                    detector = {
+                        'id': f'{name}_{counter}',
+                        'lane': lane_id,
+                        'pos': str(position),
+                        'freq': str(frequency),
+                        'file': storage_file,
+                        'friendlyPos': str(friendly_position).lower(),
+                        'type': 'inductionLoop',
+                    }
+                    counter += 1
+                    self.__detectors.append(detector)
 
     def add_lane_area_detector(self, det_params):
         raise NotImplementedError
@@ -1309,3 +1810,5 @@ class DetectorParams:
             )
         self.__pending_detectors = []
         return self.__detectors
+
+#TODO: Add Aimsun detector parameters
