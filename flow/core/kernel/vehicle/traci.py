@@ -1114,3 +1114,7 @@ class TraCIVehicle(KernelVehicle):
     def set_max_speed(self, veh_id, max_speed):
         """See parent class."""
         self.kernel_api.vehicle.setMaxSpeed(veh_id, max_speed)
+
+    def get_distance(self, veh_id, error=-1001):
+        """See parent class."""
+        return self.__sumo_obs.get(veh_id, {}).get(tc.VAR_DISTANCE, error)
