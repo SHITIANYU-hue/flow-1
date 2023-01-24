@@ -31,7 +31,6 @@ class ContinuousRouter(BaseRouter):
         elif edge == current_route[-1]:
             # choose one of the available routes based on the fraction of times
             # the given route can be chosen
-            print('env.available_route',env.available_routes)
             num_routes = len(env.available_routes[edge])
             frac = [val[1] for val in env.available_routes[edge]]
             route_id = np.random.choice(
