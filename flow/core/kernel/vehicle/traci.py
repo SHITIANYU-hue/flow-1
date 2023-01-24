@@ -1157,11 +1157,10 @@ class TraCIVehicle(KernelVehicle):
         """See parent class."""
         self.kernel_api.vehicle.setMaxSpeed(veh_id, max_speed)
 
-<<<<<<< HEAD
     def get_distance(self, veh_id, error=-1001):
         """See parent class."""
         return self.__sumo_obs.get(veh_id, {}).get(tc.VAR_DISTANCE, error)
-=======
+
     def get_accel(self, veh_id, noise=True, failsafe=True):
         """See parent class."""
         metric_name = 'accel'
@@ -1210,4 +1209,3 @@ class TraCIVehicle(KernelVehicle):
         """See parent class."""
         # TODO : Brent
         return 0
->>>>>>> 967cb78547a5e22d964e2086d0d9520ad1e1e1fb

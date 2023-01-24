@@ -64,13 +64,18 @@ class TraCISimulation(KernelSimulation):
         self.sumo_proc = None
         self.sim_step = None
         self.emission_path = None
-        self.cur_step = 0
         self.time = 0
-        self.last_reset_time = None
         self.stored_data = dict()
 
-    def subscribe_to_traci(self):
-        """ Initializes TraCI subscriptions """
+    def pass_api(self, kernel_api):
+        """See parent class.
+
+        Also initializes subscriptions.
+        """
+        KernelSimulation.pass_api(self, kernel_api)
+
+        # subscribe some simulation parameters needed to check for entering,
+        # exiting, and colliding vehicles
         self.kernel_api.simulation.subscribe([
             tc.VAR_DEPARTED_VEHICLES_IDS,
             tc.VAR_ARRIVED_VEHICLES_IDS,
@@ -82,17 +87,6 @@ class TraCISimulation(KernelSimulation):
             tc.VAR_ARRIVED_VEHICLES_NUMBER
         ])
 
-    def pass_api(self, kernel_api):
-        """See parent class.
-
-        Also initializes subscriptions.
-        """
-        KernelSimulation.pass_api(self, kernel_api)
-
-        # subscribe some simulation parameters needed to check for entering,
-        # exiting, and colliding vehicles
-        self.subscribe_to_traci()
-
     def simulation_step(self):
         """See parent class."""
         self.kernel_api.simulationStep()
@@ -100,64 +94,59 @@ class TraCISimulation(KernelSimulation):
     def update(self, reset):
         """See parent class."""
         if reset:
-            self.kernel_api.load(self.sumo_call)
-            self.subscribe_to_traci()
-            self.last_reset_time = self.time
-            self.cur_step = 0
             self.time = 0
         else:
-            self.cur_step += 1
             self.time += self.sim_step
 
         # Collect the additional data to store in the emission file.
-        #if self.emission_path is not None:
-        #    kv = self.master_kernel.vehicle
-        #    for veh_id in self.master_kernel.vehicle.get_ids():
-        #        t = round(self.time, 2)
+        if self.emission_path is not None:
+            kv = self.master_kernel.vehicle
+            for veh_id in self.master_kernel.vehicle.get_ids():
+                t = round(self.time, 2)
 
                 # some miscellaneous pre-processing
-        #        position = kv.get_2d_position(veh_id)
+                position = kv.get_2d_position(veh_id)
 
                 # Make sure dictionaries corresponding to the vehicle and
                 # time are available.
-        #        if veh_id not in self.stored_data.keys():
-        #            self.stored_data[veh_id] = dict()
-        #        if t not in self.stored_data[veh_id].keys():
-        #            self.stored_data[veh_id][t] = dict()
+                if veh_id not in self.stored_data.keys():
+                    self.stored_data[veh_id] = dict()
+                if t not in self.stored_data[veh_id].keys():
+                    self.stored_data[veh_id][t] = dict()
 
                 # Add the speed, position, and lane data.
-        #        self.stored_data[veh_id][t].update({
-        #            "speed": kv.get_speed(veh_id),
-        #            "lane_number": kv.get_lane(veh_id),
-        #            "edge_id": kv.get_edge(veh_id),
-        #            "relative_position": kv.get_position(veh_id),
-        #            "x": position[0],
-        #            "y": position[1],
-        #            "headway": kv.get_headway(veh_id),
-        #            "leader_id": kv.get_leader(veh_id),
-        #            "follower_id": kv.get_follower(veh_id),
-        #            "leader_rel_speed":
-        #                kv.get_speed(kv.get_leader(veh_id))
-        #                - kv.get_speed(veh_id),
-        #            "target_accel_with_noise_with_failsafe":
-        #                kv.get_accel(veh_id, noise=True, failsafe=True),
-        #            "target_accel_no_noise_no_failsafe":
-        #                kv.get_accel(veh_id, noise=False, failsafe=False),
-        #            "target_accel_with_noise_no_failsafe":
-        #                kv.get_accel(veh_id, noise=True, failsafe=False),
-        #            "target_accel_no_noise_with_failsafe":
-        #                kv.get_accel(veh_id, noise=False, failsafe=True),
-        #            "realized_accel":
-        #                kv.get_realized_accel(veh_id),
-        #            "road_grade": kv.get_road_grade(veh_id),
-        #            "distance": kv.get_distance(veh_id),
-        #        })
+                self.stored_data[veh_id][t].update({
+                    "speed": kv.get_speed(veh_id),
+                    "lane_number": kv.get_lane(veh_id),
+                    "edge_id": kv.get_edge(veh_id),
+                    "relative_position": kv.get_position(veh_id),
+                    "x": position[0],
+                    "y": position[1],
+                    "headway": kv.get_headway(veh_id),
+                    "leader_id": kv.get_leader(veh_id),
+                    "follower_id": kv.get_follower(veh_id),
+                    "leader_rel_speed":
+                        kv.get_speed(kv.get_leader(veh_id))
+                        - kv.get_speed(veh_id),
+                    "target_accel_with_noise_with_failsafe":
+                        kv.get_accel(veh_id, noise=True, failsafe=True),
+                    "target_accel_no_noise_no_failsafe":
+                        kv.get_accel(veh_id, noise=False, failsafe=False),
+                    "target_accel_with_noise_no_failsafe":
+                        kv.get_accel(veh_id, noise=True, failsafe=False),
+                    "target_accel_no_noise_with_failsafe":
+                        kv.get_accel(veh_id, noise=False, failsafe=True),
+                    "realized_accel":
+                        kv.get_realized_accel(veh_id),
+                    "road_grade": kv.get_road_grade(veh_id),
+                    "distance": kv.get_distance(veh_id),
+                })
 
     def close(self):
         """See parent class."""
         # Save the emission data to a csv.
-        #if self.emission_path is not None:
-        #    self.save_emission()
+        if self.emission_path is not None:
+            self.save_emission()
 
         self.kernel_api.close()
 
@@ -180,20 +169,11 @@ class TraCISimulation(KernelSimulation):
         """
         # Save the simulation step size (for later use).
         self.sim_step = sim_params.sim_step
-        self.start_time = sim_params.start_time
-
-        self.warmup_time = sim_params.warmup_time
-        self.warmup_simsteps = sim_params.warmup_simsteps
-        self.horizon_time = sim_params.horizon_time
-        self.horizon_simsteps = sim_params.horizon_simsteps
-
-        self.total_simsteps = self.warmup_simsteps + self.horizon_simsteps
-
 
         # Update the emission path term.
-        #self.emission_path = sim_params.emission_path
-        #if self.emission_path is not None:
-        #    ensure_dir(self.emission_path)
+        self.emission_path = sim_params.emission_path
+        if self.emission_path is not None:
+            ensure_dir(self.emission_path)
 
         error = None
         for _ in range(RETRIES_ON_ERROR):
@@ -205,68 +185,46 @@ class TraCISimulation(KernelSimulation):
                     else "sumo"
 
                 # command used to start sumo
-                self.sumo_call = [
-                    "-c", network.cfg,
+                sumo_call = [
+                    sumo_binary, "-c", network.cfg,
                     "--remote-port", str(sim_params.port),
                     "--num-clients", str(sim_params.num_clients),
-                    "--step-length", str(sim_params.sim_step),
+                    "--step-length", str(sim_params.sim_step)
                 ]
-
-                # include state of RNGs when saving state
-                if sim_params.save_rng_state:
-                    self.sumo_call.append("--save-state.rng")
-                    self.sumo_call.append("true")
 
                 # use a ballistic integration step (if request)
                 if sim_params.use_ballistic:
-                    self.sumo_call.append("--step-method.ballistic")
-                    self.sumo_call.append("true")
+                    sumo_call.append("--step-method.ballistic")
 
                 # ignore step logs (if requested)
                 if sim_params.no_step_log:
-                    self.sumo_call.append("--no-step-log")
-                    self.sumo_call.append("true")
+                    sumo_call.append("--no-step-log")
 
                 # add the lateral resolution of the sublanes (if requested)
                 if sim_params.lateral_resolution is not None:
-                    self.sumo_call.append("--lateral-resolution")
-                    self.sumo_call.append(str(sim_params.lateral_resolution))
+                    sumo_call.append("--lateral-resolution")
+                    sumo_call.append(str(sim_params.lateral_resolution))
 
                 if sim_params.overtake_right:
-                    self.sumo_call.append("--lanechange.overtake-right")
-                    self.sumo_call.append("true")
+                    sumo_call.append("--lanechange.overtake-right")
+                    sumo_call.append("true")
 
                 # specify a simulation seed (if requested)
                 if sim_params.seed is not None:
-                    self.sumo_call.append("--seed")
-                    self.sumo_call.append(str(sim_params.seed))
+                    sumo_call.append("--seed")
+                    sumo_call.append(str(sim_params.seed))
 
                 if not sim_params.print_warnings:
-                    self.sumo_call.append("--no-warnings")
-                    self.sumo_call.append("true")
-
-                # set the delay between sim-steps (in ms)
-                if sim_params.delay_between_simsteps:
-                    self.sumo_call.append("--delay")
-                    self.sumo_call.append(str(sim_params.delay_between_simsteps))
-
-                # automatically run after loading
-                if sim_params.start_at_load:
-                    self.sumo_call.append("--start")
-                    self.sumo_call.append("true")
-
-                # generate SUMO emission file
-                if sim_params.emission_path:
-                    self.sumo_call.append("--emission-output")
-                    self.sumo_call.append(str(sim_params.emission_path))
+                    sumo_call.append("--no-warnings")
+                    sumo_call.append("true")
 
                 # set the time it takes for a gridlock teleport to occur
-                self.sumo_call.append("--time-to-teleport")
-                self.sumo_call.append(str(int(sim_params.teleport_time)))
+                sumo_call.append("--time-to-teleport")
+                sumo_call.append(str(int(sim_params.teleport_time)))
 
                 # check collisions at intersections
-                self.sumo_call.append("--collision.check-junctions")
-                self.sumo_call.append("true")
+                sumo_call.append("--collision.check-junctions")
+                sumo_call.append("true")
 
                 logging.info(" Starting SUMO on port " + str(port))
                 logging.debug(" Cfg file: " + str(network.cfg))
@@ -278,9 +236,8 @@ class TraCISimulation(KernelSimulation):
 
                 # Opening the I/O thread to SUMO
                 self.sumo_proc = subprocess.Popen(
-                    [sumo_binary] + self.sumo_call,
-                    stdout=subprocess.DEVNULL,
-                    preexec_fn=os.setsid
+                    sumo_call,
+                    stdout=subprocess.DEVNULL
                 )
 
                 # wait a small period of time for the subprocess to activate
@@ -361,11 +318,11 @@ class TraCISimulation(KernelSimulation):
                 for key in stored_ids:
                     final_data[key].append(self.stored_data[veh_id][t][key])
 
-        #with open(os.path.join(self.emission_path, name), "w") as f:
-        #    print(os.path.join(self.emission_path, name), self.emission_path)
-        #    writer = csv.writer(f, delimiter=',')
-        #    writer.writerow(final_data.keys())
-        #    writer.writerows(zip(*final_data.values()))
+        with open(os.path.join(self.emission_path, name), "w") as f:
+            print(os.path.join(self.emission_path, name), self.emission_path)
+            writer = csv.writer(f, delimiter=',')
+            writer.writerow(final_data.keys())
+            writer.writerows(zip(*final_data.values()))
 
         # Clear all memory from the stored data. This is useful if this
         # function is called in between resets.

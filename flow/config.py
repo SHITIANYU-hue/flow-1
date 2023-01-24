@@ -25,3 +25,4 @@ AIMSUN_NEXT_PATH = os.environ.get("AIMSUN_NEXT_PATH", None)
 # path to the aimsun_flow environment's main directory (required for Aimsun
 # simulations)
 AIMSUN_SITEPACKAGES = os.environ.get("AIMSUN_SITEPACKAGES", None)
+WOLF_SEED=10
