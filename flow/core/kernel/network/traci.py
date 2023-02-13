@@ -309,7 +309,7 @@ class TraCIKernelNetwork(BaseKernelNetwork):
         try:
             return self._edges[edge_id]['speed']
         except KeyError:
-            print('Error in speed limit with key', edge_id)
+            # print('Error in speed limit with key', edge_id)
             return -1001
 
     def num_lanes(self, edge_id):
